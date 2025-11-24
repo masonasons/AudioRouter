@@ -17,14 +17,30 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Clone RNNoise
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          git
+          autoconf
+          automake
+          libtool
+          make
+
+    - name: Clone and Build RNNoise
+      shell: msys2 {0}
       run: |
-        if (!(Test-Path "external")) { mkdir external }
+        mkdir -p external
         cd external
-        if (!(Test-Path "rnnoise")) {
+        if [ ! -d "rnnoise" ]; then
           git clone https://github.com/xiph/rnnoise.git
-        }
-      shell: pwsh
+        fi
+        cd rnnoise
+        ./autogen.sh
+        ./configure
+        make
 
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
