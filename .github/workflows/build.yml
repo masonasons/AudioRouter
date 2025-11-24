@@ -28,6 +28,7 @@ jobs:
           automake
           libtool
           make
+          mingw-w64-x86_64-gcc
 
     - name: Clone and Build RNNoise
       shell: msys2 {0}
