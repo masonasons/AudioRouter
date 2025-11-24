@@ -236,6 +236,11 @@ void PopulateDeviceLists()
     SendMessage(g_hInputCombo, CB_RESETCONTENT, 0, 0);
     SendMessage(g_hOutputCombo, CB_RESETCONTENT, 0, 0);
 
+    // Add default input device as first option
+    AudioDevice defaultInput = g_deviceManager->GetDefaultInputDevice();
+    int defaultInputIndex = SendMessage(g_hInputCombo, CB_ADDSTRING, 0, (LPARAM)defaultInput.name.c_str());
+    SendMessage(g_hInputCombo, CB_SETITEMDATA, defaultInputIndex, (LPARAM)new std::wstring(defaultInput.id));
+
     // Get input devices
     std::vector<AudioDevice> inputDevices = g_deviceManager->GetInputDevices();
     for (const auto& device : inputDevices)
@@ -243,8 +248,14 @@ void PopulateDeviceLists()
         int index = SendMessage(g_hInputCombo, CB_ADDSTRING, 0, (LPARAM)device.name.c_str());
         SendMessage(g_hInputCombo, CB_SETITEMDATA, index, (LPARAM)new std::wstring(device.id));
     }
-    if (!inputDevices.empty())
-        SendMessage(g_hInputCombo, CB_SETCURSEL, 0, 0);
+
+    // Select default (first item) by default
+    SendMessage(g_hInputCombo, CB_SETCURSEL, 0, 0);
+
+    // Add default output device as first option
+    AudioDevice defaultOutput = g_deviceManager->GetDefaultOutputDevice();
+    int defaultOutputIndex = SendMessage(g_hOutputCombo, CB_ADDSTRING, 0, (LPARAM)defaultOutput.name.c_str());
+    SendMessage(g_hOutputCombo, CB_SETITEMDATA, defaultOutputIndex, (LPARAM)new std::wstring(defaultOutput.id));
 
     // Get output devices
     std::vector<AudioDevice> outputDevices = g_deviceManager->GetOutputDevices();
@@ -253,8 +264,9 @@ void PopulateDeviceLists()
         int index = SendMessage(g_hOutputCombo, CB_ADDSTRING, 0, (LPARAM)device.name.c_str());
         SendMessage(g_hOutputCombo, CB_SETITEMDATA, index, (LPARAM)new std::wstring(device.id));
     }
-    if (!outputDevices.empty())
-        SendMessage(g_hOutputCombo, CB_SETCURSEL, 0, 0);
+
+    // Select default (first item) by default
+    SendMessage(g_hOutputCombo, CB_SETCURSEL, 0, 0);
 }
 
 void OnStartStop()
@@ -389,10 +401,18 @@ void ApplyCommandLineParams(const CommandLineParams& params)
     {
         int count = SendMessage(g_hInputCombo, CB_GETCOUNT, 0, 0);
 
-        // First check if it's a numeric index
-        int numericIndex = _wtoi(params.inputDevice.c_str());
-        if (numericIndex > 0 || params.inputDevice == L"0")
+        // Check if it's "Default" (case-insensitive) - select index 0
+        std::wstring searchLower = params.inputDevice;
+        std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::towlower);
+
+        if (searchLower == L"default")
         {
+            SendMessage(g_hInputCombo, CB_SETCURSEL, 0, 0);
+        }
+        // Check if it's a numeric index
+        else if (_wtoi(params.inputDevice.c_str()) > 0 || params.inputDevice == L"0")
+        {
+            int numericIndex = _wtoi(params.inputDevice.c_str());
             if (numericIndex < count)
             {
                 SendMessage(g_hInputCombo, CB_SETCURSEL, numericIndex, 0);
@@ -408,9 +428,7 @@ void ApplyCommandLineParams(const CommandLineParams& params)
 
                 // Convert both to lowercase for case-insensitive comparison
                 std::wstring deviceNameLower = deviceName;
-                std::wstring searchLower = params.inputDevice;
                 std::transform(deviceNameLower.begin(), deviceNameLower.end(), deviceNameLower.begin(), ::towlower);
-                std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::towlower);
 
                 if (deviceNameLower.find(searchLower) != std::wstring::npos)
                 {
@@ -426,10 +444,18 @@ void ApplyCommandLineParams(const CommandLineParams& params)
     {
         int count = SendMessage(g_hOutputCombo, CB_GETCOUNT, 0, 0);
 
-        // First check if it's a numeric index
-        int numericIndex = _wtoi(params.outputDevice.c_str());
-        if (numericIndex > 0 || params.outputDevice == L"0")
+        // Check if it's "Default" (case-insensitive) - select index 0
+        std::wstring searchLower = params.outputDevice;
+        std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::towlower);
+
+        if (searchLower == L"default")
         {
+            SendMessage(g_hOutputCombo, CB_SETCURSEL, 0, 0);
+        }
+        // Check if it's a numeric index
+        else if (_wtoi(params.outputDevice.c_str()) > 0 || params.outputDevice == L"0")
+        {
+            int numericIndex = _wtoi(params.outputDevice.c_str());
             if (numericIndex < count)
             {
                 SendMessage(g_hOutputCombo, CB_SETCURSEL, numericIndex, 0);
@@ -445,9 +471,7 @@ void ApplyCommandLineParams(const CommandLineParams& params)
 
                 // Convert both to lowercase for case-insensitive comparison
                 std::wstring deviceNameLower = deviceName;
-                std::wstring searchLower = params.outputDevice;
                 std::transform(deviceNameLower.begin(), deviceNameLower.end(), deviceNameLower.begin(), ::towlower);
-                std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::towlower);
 
                 if (deviceNameLower.find(searchLower) != std::wstring::npos)
                 {
@@ -478,11 +502,35 @@ void SaveSettingsToBatchFile()
         return;
     }
 
-    // Get device names
-    wchar_t inputName[256] = {0};
-    wchar_t outputName[256] = {0};
-    SendMessage(g_hInputCombo, CB_GETLBTEXT, inputIndex, (LPARAM)inputName);
-    SendMessage(g_hOutputCombo, CB_GETLBTEXT, outputIndex, (LPARAM)outputName);
+    // Get device IDs and names
+    std::wstring* inputId = (std::wstring*)SendMessage(g_hInputCombo, CB_GETITEMDATA, inputIndex, 0);
+    std::wstring* outputId = (std::wstring*)SendMessage(g_hOutputCombo, CB_GETITEMDATA, outputIndex, 0);
+
+    // For command line, use "Default" if ID is "DEFAULT", otherwise use device name
+    std::wstring inputParam;
+    std::wstring outputParam;
+
+    if (*inputId == L"DEFAULT")
+    {
+        inputParam = L"Default";
+    }
+    else
+    {
+        wchar_t inputName[256] = {0};
+        SendMessage(g_hInputCombo, CB_GETLBTEXT, inputIndex, (LPARAM)inputName);
+        inputParam = inputName;
+    }
+
+    if (*outputId == L"DEFAULT")
+    {
+        outputParam = L"Default";
+    }
+    else
+    {
+        wchar_t outputName[256] = {0};
+        SendMessage(g_hOutputCombo, CB_GETLBTEXT, outputIndex, (LPARAM)outputName);
+        outputParam = outputName;
+    }
 
     // Open file dialog
     OPENFILENAME ofn = {};
@@ -511,8 +559,8 @@ void SaveSettingsToBatchFile()
         std::wstring cmdLine = L"@echo off\r\n";
         cmdLine += L"cd /d \"" + std::wstring(exeDir) + L"\"\r\n";
         cmdLine += L"start AudioRouter.exe";
-        cmdLine += L" --input \"" + std::wstring(inputName) + L"\"";
-        cmdLine += L" --output \"" + std::wstring(outputName) + L"\"";
+        cmdLine += L" --input \"" + inputParam + L"\"";
+        cmdLine += L" --output \"" + outputParam + L"\"";
         if (noiseEnabled)
             cmdLine += L" --noise";
         cmdLine += L" --autostart";

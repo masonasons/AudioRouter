@@ -32,6 +32,54 @@ std::vector<AudioDevice> AudioDeviceManager::GetOutputDevices()
     return EnumerateDevices(eRender);
 }
 
+AudioDevice AudioDeviceManager::GetDefaultInputDevice()
+{
+    return GetDefaultDevice(eCapture);
+}
+
+AudioDevice AudioDeviceManager::GetDefaultOutputDevice()
+{
+    return GetDefaultDevice(eRender);
+}
+
+AudioDevice AudioDeviceManager::GetDefaultDevice(EDataFlow dataFlow)
+{
+    AudioDevice device;
+    device.id = L"DEFAULT";
+    device.name = L"Default";
+
+    if (!m_pEnumerator)
+        return device;
+
+    IMMDevice* pDevice = nullptr;
+    HRESULT hr = m_pEnumerator->GetDefaultAudioEndpoint(dataFlow, eConsole, &pDevice);
+
+    if (FAILED(hr))
+        return device;
+
+    // Get device friendly name
+    IPropertyStore* pProps = nullptr;
+    hr = pDevice->OpenPropertyStore(STGM_READ, &pProps);
+    if (SUCCEEDED(hr))
+    {
+        PROPVARIANT varName;
+        PropVariantInit(&varName);
+
+        hr = pProps->GetValue(PKEY_Device_FriendlyName, &varName);
+        if (SUCCEEDED(hr))
+        {
+            // Format as "Default (DeviceName)"
+            device.name = L"Default (" + std::wstring(varName.pwszVal) + L")";
+            PropVariantClear(&varName);
+        }
+
+        pProps->Release();
+    }
+
+    pDevice->Release();
+    return device;
+}
+
 std::vector<AudioDevice> AudioDeviceManager::EnumerateDevices(EDataFlow dataFlow)
 {
     std::vector<AudioDevice> devices;

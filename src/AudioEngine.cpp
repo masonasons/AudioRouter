@@ -285,7 +285,20 @@ bool AudioEngine::InitializeDevice(const std::wstring& deviceId, bool isInput, I
     }
 
     // Get device
-    hr = pEnumerator->GetDevice(deviceId.c_str(), ppDevice);
+    if (deviceId == L"DEFAULT")
+    {
+        // Use system default device
+        hr = pEnumerator->GetDefaultAudioEndpoint(
+            isInput ? eCapture : eRender,
+            eConsole,
+            ppDevice
+        );
+    }
+    else
+    {
+        // Use specific device ID
+        hr = pEnumerator->GetDevice(deviceId.c_str(), ppDevice);
+    }
     pEnumerator->Release();
 
     if (FAILED(hr))

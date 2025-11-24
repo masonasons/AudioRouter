@@ -19,9 +19,12 @@ public:
 
     std::vector<AudioDevice> GetInputDevices();
     std::vector<AudioDevice> GetOutputDevices();
+    AudioDevice GetDefaultInputDevice();
+    AudioDevice GetDefaultOutputDevice();
 
 private:
     IMMDeviceEnumerator* m_pEnumerator;
 
     std::vector<AudioDevice> EnumerateDevices(EDataFlow dataFlow);
+    AudioDevice GetDefaultDevice(EDataFlow dataFlow);
 };
