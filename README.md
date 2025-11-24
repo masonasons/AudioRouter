@@ -1,13 +1,23 @@
 # Audio Router
 
-A simple Windows application for routing audio from input devices to output devices with optional noise suppression.
+A simple Windows application for routing audio from input devices to output devices with optional RNNoise noise suppression.
+
+## Download
+
+**[Download Latest Build](https://github.com/masonasons/AudioRouter/releases/latest/download/AudioRouter.exe)**
+
+Or visit the [Releases Page](https://github.com/masonasons/AudioRouter/releases/latest) for more information.
 
 ## Features
 
 - Route audio from any input device (microphone, line-in) to any output device (speakers, headphones)
-- Optional RNNoise-based noise suppression (disabled by default)
-- Simple Win32 interface for maximum accessibility
-- Low-latency audio routing using WASAPI
+- RNNoise neural network noise suppression (optional, configurable)
+- System tray integration with minimize to tray
+- Command line parameters for automation (`--input`, `--output`, `--noise`, `--autostart`, `--autohide`)
+- Batch file generation for startup scripts
+- Sample rate and channel conversion support
+- Simple Win32 interface with keyboard navigation (Tab, Ctrl+S)
+- Low-latency audio routing using WASAPI event-driven mode
 
 ## Requirements
 
@@ -46,23 +56,45 @@ build.bat
 
 ## Usage
 
+### Basic Usage
+
 1. Launch `AudioRouter.exe`
 2. Select your input device (e.g., microphone) from the dropdown
 3. Select your output device (e.g., speakers or headphones) from the dropdown
 4. (Optional) Check "Enable Noise Suppression" to reduce background noise
-5. Click "Start" to begin routing audio
-6. Click "Stop" to stop routing
+5. Click "Start" to begin routing audio (or press Ctrl+S)
+6. Click "Stop" to stop routing (or press Ctrl+S again)
+7. Click "Save Settings" to create a batch file for quick startup
+
+### Command Line Usage
+
+```batch
+AudioRouter.exe --input "Microphone" --output "Speakers" --noise --autostart --autohide
+```
+
+**Parameters:**
+- `--input <device>` or `-i <device>` - Select input device by name or index
+- `--output <device>` or `-o <device>` - Select output device by name or index
+- `--noise` or `-n` - Enable noise suppression
+- `--autostart` or `-a` - Automatically start audio routing
+- `--autohide` or `-h` - Launch minimized to system tray
+
+### System Tray
+
+- Minimize the window to send it to the system tray
+- Left-click the tray icon to restore the window
+- Right-click the tray icon for options (Restore, Exit)
+- Tray tooltip shows the current audio routing when active
 
 ## Noise Suppression
 
-The application includes stub support for RNNoise noise suppression. To enable full RNNoise functionality:
+The application includes full RNNoise neural network noise suppression. RNNoise is automatically downloaded and built during the CMake build process.
 
-1. Download or build the RNNoise library from: https://github.com/xiph/rnnoise
-2. Place `rnnoise.h` in `external/rnnoise/include/`
-3. Place `rnnoise.lib` in `external/rnnoise/lib/`
-4. Update `src/NoiseSuppress.cpp` to include the real `rnnoise.h`
-5. Uncomment the RNNoise lines in `CMakeLists.txt`
-6. Rebuild the project
+**How it works:**
+- Uses the Xiph.org RNNoise library for deep learning-based noise reduction
+- Processes audio in 480-sample frames at any sample rate (with automatic resampling)
+- Supports mono and stereo input/output with automatic channel conversion
+- Maintains low latency while providing effective noise suppression
 
 ## Architecture
 
