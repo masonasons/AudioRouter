@@ -16,7 +16,6 @@ AudioEngine::AudioEngine()
     , m_pCaptureClient(nullptr)
     , m_pRenderClient(nullptr)
     , m_noiseSuppressor(nullptr)
-    , m_enableNoiseSuppression(false)
     , m_hThread(NULL)
     , m_hStopEvent(NULL)
     , m_isRunning(false)
@@ -38,12 +37,12 @@ AudioEngine::~AudioEngine()
     delete m_noiseSuppressor;
 }
 
-bool AudioEngine::Start(const std::wstring& inputDeviceId, const std::wstring& outputDeviceId, bool enableNoiseSuppression)
+bool AudioEngine::Start(const std::wstring& inputDeviceId, const std::wstring& outputDeviceId, const NoiseReductionConfig& noiseConfig)
 {
     if (m_isRunning)
         return false;
 
-    m_enableNoiseSuppression = enableNoiseSuppression;
+    m_noiseConfig = noiseConfig;
 
     // Initialize devices
     ReportStatus(L"Initializing input device...");
@@ -122,31 +121,25 @@ bool AudioEngine::Start(const std::wstring& inputDeviceId, const std::wstring& o
         ReportStatus(warning.str());
     }
 
-    // Initialize noise suppression if enabled
-    if (m_enableNoiseSuppression)
+    // Initialize noise suppression
+    // Set up diagnostic callback for NoiseSuppress
+    m_noiseSuppressor->SetDiagnosticCallback([this](const std::wstring& msg) {
+        ReportStatus(msg);
+    });
+
+    if (m_noiseConfig.isEnabled())
     {
-        // Set up diagnostic callback for NoiseSuppress
-        m_noiseSuppressor->SetDiagnosticCallback([this](const std::wstring& msg) {
-            ReportStatus(msg);
-        });
+        std::wostringstream msg;
+        msg << L"Initializing noise reduction: " << NoiseReductionConfig::getTypeName(m_noiseConfig.type);
+        ReportStatus(msg.str());
 
-        // Check if sample rate is compatible with RNNoise (requires 48kHz)
-        if (m_pInputFormat->nSamplesPerSec != 48000)
+        if (!m_noiseSuppressor->Initialize(m_noiseConfig, m_pInputFormat->nSamplesPerSec, m_pInputFormat->nChannels))
         {
-            std::wostringstream warning;
-            warning << L"WARNING: RNNoise requires 48kHz, but input audio is "
-                    << m_pInputFormat->nSamplesPerSec << L" Hz. Noise suppression may not work correctly!";
-            ReportStatus(warning.str());
-        }
-
-        if (!m_noiseSuppressor->Initialize())
-        {
-            ReportStatus(L"ERROR: Failed to initialize RNNoise! Noise suppression will not work.");
+            std::wostringstream errMsg;
+            errMsg << L"ERROR: Failed to initialize " << NoiseReductionConfig::getTypeName(m_noiseConfig.type)
+                   << L"! Noise suppression will not work.";
+            ReportStatus(errMsg.str());
             // Continue anyway - audio routing will still work
-        }
-        else
-        {
-            ReportStatus(L"RNNoise initialized successfully");
         }
     }
     else
@@ -506,12 +499,14 @@ void AudioEngine::AudioThread()
                         }
 
                         // Step 2: Apply noise suppression (if enabled, works on input format)
-                        if (m_enableNoiseSuppression)
+                        if (m_noiseConfig.isEnabled() && m_noiseSuppressor->IsInitialized())
                         {
                             static bool firstProcess = true;
                             if (firstProcess)
                             {
-                                ReportStatus(L"Applying noise suppression...");
+                                std::wostringstream msg;
+                                msg << L"Applying " << NoiseReductionConfig::getTypeName(m_noiseConfig.type) << L" noise suppression...";
+                                ReportStatus(msg.str());
                                 firstProcess = false;
                             }
                             m_noiseSuppressor->Process(m_conversionBuffer.data(), numFramesAvailable, m_pInputFormat->nChannels);

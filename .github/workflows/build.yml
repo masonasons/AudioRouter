@@ -46,6 +46,14 @@ jobs:
         ./configure
         make
 
+    - name: Clone SpeexDSP
+      shell: msys2 {0}
+      run: |
+        cd external
+        if [ ! -d "speexdsp" ]; then
+          git clone https://gitlab.xiph.org/xiph/speexdsp.git
+        fi
+
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
 

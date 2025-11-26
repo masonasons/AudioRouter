@@ -7,6 +7,7 @@
 #include <vector>
 #include <functional>
 #include "NoiseSuppress.h"
+#include "NoiseReductionTypes.h"
 
 class AudioEngine
 {
@@ -14,7 +15,7 @@ public:
     AudioEngine();
     ~AudioEngine();
 
-    bool Start(const std::wstring& inputDeviceId, const std::wstring& outputDeviceId, bool enableNoiseSuppression);
+    bool Start(const std::wstring& inputDeviceId, const std::wstring& outputDeviceId, const NoiseReductionConfig& noiseConfig);
     void Stop();
     bool IsRunning() const { return m_isRunning; }
 
@@ -34,7 +35,7 @@ private:
     IAudioRenderClient* m_pRenderClient;
 
     NoiseSuppress* m_noiseSuppressor;
-    bool m_enableNoiseSuppression;
+    NoiseReductionConfig m_noiseConfig;
 
     HANDLE m_hThread;
     HANDLE m_hStopEvent;

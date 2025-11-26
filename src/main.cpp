@@ -6,18 +6,26 @@
 #include <algorithm>
 #include "AudioDeviceManager.h"
 #include "AudioEngine.h"
+#include "NoiseReductionTypes.h"
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "comctl32.lib")
 
 // Control IDs
 #define IDC_INPUT_COMBO      1001
 #define IDC_OUTPUT_COMBO     1002
-#define IDC_NOISE_CHECK      1003
+#define IDC_NOISE_COMBO      1003
 #define IDC_START_BUTTON     1004
 #define IDC_STATUS_TEXT      1005
 #define IDC_SAVE_BUTTON      1006
 #define IDC_DIAG_TEXT        1007
+#define IDC_SPEEX_LEVEL_LABEL    1008
+#define IDC_SPEEX_LEVEL_SLIDER   1009
+#define IDC_SPEEX_LEVEL_VALUE    1010
+#define IDC_SPEEX_VAD_CHECK      1011
+#define IDC_SPEEX_AGC_CHECK      1012
+#define IDC_SPEEX_DEREVERB_CHECK 1013
 
 // System tray
 #define WM_TRAYICON          (WM_USER + 1)
@@ -29,14 +37,25 @@
 HWND g_hWnd = NULL;
 HWND g_hInputCombo = NULL;
 HWND g_hOutputCombo = NULL;
-HWND g_hNoiseCheck = NULL;
+HWND g_hNoiseCombo = NULL;
 HWND g_hStartButton = NULL;
 HWND g_hStatusText = NULL;
 HWND g_hDiagText = NULL;
 
+// Speex configuration controls
+HWND g_hSpeexLevelLabel = NULL;
+HWND g_hSpeexLevelSlider = NULL;
+HWND g_hSpeexLevelValue = NULL;
+HWND g_hSpeexVadCheck = NULL;
+HWND g_hSpeexAgcCheck = NULL;
+HWND g_hSpeexDereverbCheck = NULL;
+
 AudioDeviceManager* g_deviceManager = nullptr;
 AudioEngine* g_audioEngine = nullptr;
 bool g_isRunning = false;
+
+// Current noise reduction config (for Speex settings persistence)
+NoiseReductionConfig g_noiseConfig;
 
 // System tray
 NOTIFYICONDATA g_nid = {};
@@ -47,7 +66,11 @@ struct CommandLineParams
 {
     std::wstring inputDevice;
     std::wstring outputDevice;
-    bool enableNoise = false;
+    NoiseReductionType noiseType = NoiseReductionType::Off;
+    int speexLevel = -25;  // dB
+    bool speexVad = false;
+    bool speexAgc = false;
+    bool speexDereverb = false;
     bool autoStart = false;
     bool autoHide = false;
 };
@@ -69,11 +92,20 @@ void UpdateTrayTooltip();
 void RestoreFromTray();
 void MinimizeToTray();
 void ShowTrayContextMenu();
+void UpdateSpeexControlsVisibility();
+void UpdateSpeexLevelDisplay();
+NoiseReductionConfig GetNoiseConfigFromUI();
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     // Initialize COM
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+    // Initialize common controls (for trackbar/slider)
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+    icex.dwICC = ICC_BAR_CLASSES;
+    InitCommonControlsEx(&icex);
 
     // Register window class
     WNDCLASSEX wcex = {};
@@ -86,13 +118,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wcex.lpszClassName = L"AudioRouterClass";
     RegisterClassEx(&wcex);
 
-    // Create main window (increased height for diagnostics)
+    // Create main window (increased height for diagnostics and Speex config)
     g_hWnd = CreateWindowEx(
         0,
         L"AudioRouterClass",
         L"Audio Router",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 450, 400,
+        CW_USEDEFAULT, CW_USEDEFAULT, 450, 520,
         NULL, NULL, hInstance, NULL
     );
 
@@ -169,61 +201,119 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 void InitializeControls(HWND hWnd)
 {
     HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    int yPos = 10;
 
     // Input device label
     HWND hLabel = CreateWindow(L"STATIC", L"Input Device:",
         WS_VISIBLE | WS_CHILD,
-        10, 10, 120, 20, hWnd, NULL, NULL, NULL);
+        10, yPos, 120, 20, hWnd, NULL, NULL, NULL);
     SendMessage(hLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 25;
 
     // Input device combo box
     g_hInputCombo = CreateWindow(L"COMBOBOX", NULL,
         WS_VISIBLE | WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
-        10, 35, 360, 200, hWnd, (HMENU)IDC_INPUT_COMBO, NULL, NULL);
+        10, yPos, 360, 200, hWnd, (HMENU)IDC_INPUT_COMBO, NULL, NULL);
     SendMessage(g_hInputCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 35;
 
     // Output device label
     hLabel = CreateWindow(L"STATIC", L"Output Device:",
         WS_VISIBLE | WS_CHILD,
-        10, 70, 120, 20, hWnd, NULL, NULL, NULL);
+        10, yPos, 120, 20, hWnd, NULL, NULL, NULL);
     SendMessage(hLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 25;
 
     // Output device combo box
     g_hOutputCombo = CreateWindow(L"COMBOBOX", NULL,
         WS_VISIBLE | WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
-        10, 95, 360, 200, hWnd, (HMENU)IDC_OUTPUT_COMBO, NULL, NULL);
+        10, yPos, 360, 200, hWnd, (HMENU)IDC_OUTPUT_COMBO, NULL, NULL);
     SendMessage(g_hOutputCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 35;
 
-    // Noise suppression checkbox
-    g_hNoiseCheck = CreateWindow(L"BUTTON", L"Enable Noise Suppression",
-        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX,
-        10, 130, 200, 20, hWnd, (HMENU)IDC_NOISE_CHECK, NULL, NULL);
-    SendMessage(g_hNoiseCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+    // Noise suppression label
+    hLabel = CreateWindow(L"STATIC", L"Noise Reduction:",
+        WS_VISIBLE | WS_CHILD,
+        10, yPos, 120, 20, hWnd, NULL, NULL, NULL);
+    SendMessage(hLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+    // Noise suppression combo box (Off/RNNoise/Speex)
+    g_hNoiseCombo = CreateWindow(L"COMBOBOX", NULL,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+        130, yPos - 3, 150, 100, hWnd, (HMENU)IDC_NOISE_COMBO, NULL, NULL);
+    SendMessage(g_hNoiseCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
+    SendMessage(g_hNoiseCombo, CB_ADDSTRING, 0, (LPARAM)L"Off");
+    SendMessage(g_hNoiseCombo, CB_ADDSTRING, 0, (LPARAM)L"RNNoise");
+    SendMessage(g_hNoiseCombo, CB_ADDSTRING, 0, (LPARAM)L"Speex");
+    SendMessage(g_hNoiseCombo, CB_SETCURSEL, 0, 0);  // Default to Off
+    yPos += 30;
+
+    // Speex configuration controls (initially hidden)
+    // Suppression level label
+    g_hSpeexLevelLabel = CreateWindow(L"STATIC", L"  Suppression Level:",
+        WS_CHILD,  // Not visible initially
+        10, yPos, 130, 20, hWnd, (HMENU)IDC_SPEEX_LEVEL_LABEL, NULL, NULL);
+    SendMessage(g_hSpeexLevelLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+    // Suppression level slider (trackbar)
+    g_hSpeexLevelSlider = CreateWindowEx(
+        0, TRACKBAR_CLASS, NULL,
+        WS_CHILD | WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+        140, yPos - 3, 180, 25, hWnd, (HMENU)IDC_SPEEX_LEVEL_SLIDER, NULL, NULL);
+    SendMessage(g_hSpeexLevelSlider, TBM_SETRANGE, TRUE, MAKELPARAM(1, 50));  // Range: -1 to -50 dB (stored as positive)
+    SendMessage(g_hSpeexLevelSlider, TBM_SETPOS, TRUE, 25);  // Default: -25 dB
+    SendMessage(g_hSpeexLevelSlider, TBM_SETTICFREQ, 5, 0);
+
+    // Level value display
+    g_hSpeexLevelValue = CreateWindow(L"STATIC", L"-25 dB",
+        WS_CHILD,  // Not visible initially
+        325, yPos, 50, 20, hWnd, (HMENU)IDC_SPEEX_LEVEL_VALUE, NULL, NULL);
+    SendMessage(g_hSpeexLevelValue, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 28;
+
+    // Speex options checkboxes
+    g_hSpeexVadCheck = CreateWindow(L"BUTTON", L"  VAD (Voice Activity Detection)",
+        WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX,
+        10, yPos, 220, 20, hWnd, (HMENU)IDC_SPEEX_VAD_CHECK, NULL, NULL);
+    SendMessage(g_hSpeexVadCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+    g_hSpeexAgcCheck = CreateWindow(L"BUTTON", L"AGC",
+        WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX,
+        235, yPos, 55, 20, hWnd, (HMENU)IDC_SPEEX_AGC_CHECK, NULL, NULL);
+    SendMessage(g_hSpeexAgcCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+    g_hSpeexDereverbCheck = CreateWindow(L"BUTTON", L"Dereverb",
+        WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX,
+        295, yPos, 80, 20, hWnd, (HMENU)IDC_SPEEX_DEREVERB_CHECK, NULL, NULL);
+    SendMessage(g_hSpeexDereverbCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 30;
 
     // Start/Stop button
     g_hStartButton = CreateWindow(L"BUTTON", L"Start",
         WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        10, 160, 100, 30, hWnd, (HMENU)IDC_START_BUTTON, NULL, NULL);
+        10, yPos, 100, 30, hWnd, (HMENU)IDC_START_BUTTON, NULL, NULL);
     SendMessage(g_hStartButton, WM_SETFONT, (WPARAM)hFont, TRUE);
 
     // Save Settings button
     HWND hSaveButton = CreateWindow(L"BUTTON", L"Save Settings",
         WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        120, 160, 120, 30, hWnd, (HMENU)IDC_SAVE_BUTTON, NULL, NULL);
+        120, yPos, 120, 30, hWnd, (HMENU)IDC_SAVE_BUTTON, NULL, NULL);
     SendMessage(hSaveButton, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 40;
 
     // Status text
     g_hStatusText = CreateWindow(L"STATIC", L"Status: Stopped",
         WS_VISIBLE | WS_CHILD,
-        10, 200, 420, 20, hWnd, (HMENU)IDC_STATUS_TEXT, NULL, NULL);
+        10, yPos, 420, 20, hWnd, (HMENU)IDC_STATUS_TEXT, NULL, NULL);
     SendMessage(g_hStatusText, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 25;
 
     // Diagnostic info text (multi-line, read-only edit control for better formatting)
     g_hDiagText = CreateWindowEx(
         WS_EX_CLIENTEDGE,
         L"EDIT", L"",
         WS_VISIBLE | WS_CHILD | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-        10, 230, 420, 120, hWnd, (HMENU)IDC_DIAG_TEXT, NULL, NULL);
+        10, yPos, 420, 120, hWnd, (HMENU)IDC_DIAG_TEXT, NULL, NULL);
     SendMessage(g_hDiagText, WM_SETFONT, (WPARAM)hFont, TRUE);
 
     // Set initial focus to the first interactive control
@@ -290,8 +380,8 @@ void OnStartStop()
         std::wstring* inputId = (std::wstring*)SendMessage(g_hInputCombo, CB_GETITEMDATA, inputIndex, 0);
         std::wstring* outputId = (std::wstring*)SendMessage(g_hOutputCombo, CB_GETITEMDATA, outputIndex, 0);
 
-        // Check if noise suppression is enabled
-        bool noiseSuppression = (SendMessage(g_hNoiseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        // Get noise reduction configuration from UI
+        NoiseReductionConfig noiseConfig = GetNoiseConfigFromUI();
 
         // Set up status callback to display diagnostics
         g_audioEngine->SetStatusCallback([](const std::wstring& status) {
@@ -299,13 +389,17 @@ void OnStartStop()
         });
 
         // Start audio engine
-        if (g_audioEngine->Start(*inputId, *outputId, noiseSuppression))
+        if (g_audioEngine->Start(*inputId, *outputId, noiseConfig))
         {
             g_isRunning = true;
             SetWindowText(g_hStartButton, L"Stop");
             EnableWindow(g_hInputCombo, FALSE);
             EnableWindow(g_hOutputCombo, FALSE);
-            EnableWindow(g_hNoiseCheck, FALSE);
+            EnableWindow(g_hNoiseCombo, FALSE);
+            EnableWindow(g_hSpeexLevelSlider, FALSE);
+            EnableWindow(g_hSpeexVadCheck, FALSE);
+            EnableWindow(g_hSpeexAgcCheck, FALSE);
+            EnableWindow(g_hSpeexDereverbCheck, FALSE);
             UpdateStatus(L"Status: Running");
             UpdateTrayTooltip();
         }
@@ -322,7 +416,11 @@ void OnStartStop()
         SetWindowText(g_hStartButton, L"Start");
         EnableWindow(g_hInputCombo, TRUE);
         EnableWindow(g_hOutputCombo, TRUE);
-        EnableWindow(g_hNoiseCheck, TRUE);
+        EnableWindow(g_hNoiseCombo, TRUE);
+        EnableWindow(g_hSpeexLevelSlider, TRUE);
+        EnableWindow(g_hSpeexVadCheck, TRUE);
+        EnableWindow(g_hSpeexAgcCheck, TRUE);
+        EnableWindow(g_hSpeexDereverbCheck, TRUE);
         UpdateStatus(L"Status: Stopped");
         UpdateTrayTooltip();
     }
@@ -377,9 +475,44 @@ void ParseCommandLine(CommandLineParams& params)
         {
             params.outputDevice = argv[++i];
         }
-        else if (arg == L"--noise" || arg == L"-n")
+        else if ((arg == L"--noise-type" || arg == L"-n") && i + 1 < argc)
         {
-            params.enableNoise = true;
+            std::wstring noiseArg = argv[++i];
+            std::transform(noiseArg.begin(), noiseArg.end(), noiseArg.begin(), ::towlower);
+            if (noiseArg == L"rnnoise" || noiseArg == L"1")
+                params.noiseType = NoiseReductionType::RNNoise;
+            else if (noiseArg == L"speex" || noiseArg == L"2")
+                params.noiseType = NoiseReductionType::Speex;
+            else
+                params.noiseType = NoiseReductionType::Off;
+        }
+        else if (arg == L"--noise" || arg == L"--rnnoise")
+        {
+            // Legacy compatibility: --noise enables RNNoise
+            params.noiseType = NoiseReductionType::RNNoise;
+        }
+        else if (arg == L"--speex")
+        {
+            params.noiseType = NoiseReductionType::Speex;
+        }
+        else if ((arg == L"--speex-level") && i + 1 < argc)
+        {
+            params.speexLevel = _wtoi(argv[++i]);
+            // Ensure valid range
+            if (params.speexLevel > -1) params.speexLevel = -1;
+            if (params.speexLevel < -50) params.speexLevel = -50;
+        }
+        else if (arg == L"--speex-vad")
+        {
+            params.speexVad = true;
+        }
+        else if (arg == L"--speex-agc")
+        {
+            params.speexAgc = true;
+        }
+        else if (arg == L"--speex-dereverb")
+        {
+            params.speexDereverb = true;
         }
         else if (arg == L"--autostart" || arg == L"-a")
         {
@@ -482,11 +615,27 @@ void ApplyCommandLineParams(const CommandLineParams& params)
         }
     }
 
-    // Apply noise suppression setting
-    if (params.enableNoise)
-    {
-        SendMessage(g_hNoiseCheck, BM_SETCHECK, BST_CHECKED, 0);
-    }
+    // Apply noise reduction type
+    int noiseIndex = static_cast<int>(params.noiseType);
+    SendMessage(g_hNoiseCombo, CB_SETCURSEL, noiseIndex, 0);
+
+    // Apply Speex settings
+    // Convert level to slider position (positive value)
+    int sliderPos = -params.speexLevel;
+    if (sliderPos < 1) sliderPos = 1;
+    if (sliderPos > 50) sliderPos = 50;
+    SendMessage(g_hSpeexLevelSlider, TBM_SETPOS, TRUE, sliderPos);
+
+    if (params.speexVad)
+        SendMessage(g_hSpeexVadCheck, BM_SETCHECK, BST_CHECKED, 0);
+    if (params.speexAgc)
+        SendMessage(g_hSpeexAgcCheck, BM_SETCHECK, BST_CHECKED, 0);
+    if (params.speexDereverb)
+        SendMessage(g_hSpeexDereverbCheck, BM_SETCHECK, BST_CHECKED, 0);
+
+    // Update Speex controls visibility and level display
+    UpdateSpeexControlsVisibility();
+    UpdateSpeexLevelDisplay();
 }
 
 void SaveSettingsToBatchFile()
@@ -494,7 +643,8 @@ void SaveSettingsToBatchFile()
     // Get current selections
     int inputIndex = SendMessage(g_hInputCombo, CB_GETCURSEL, 0, 0);
     int outputIndex = SendMessage(g_hOutputCombo, CB_GETCURSEL, 0, 0);
-    bool noiseEnabled = (SendMessage(g_hNoiseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    int noiseIndex = SendMessage(g_hNoiseCombo, CB_GETCURSEL, 0, 0);
+    NoiseReductionType noiseType = static_cast<NoiseReductionType>(noiseIndex);
 
     if (inputIndex == CB_ERR || outputIndex == CB_ERR)
     {
@@ -561,8 +711,28 @@ void SaveSettingsToBatchFile()
         cmdLine += L"start AudioRouter.exe";
         cmdLine += L" --input \"" + inputParam + L"\"";
         cmdLine += L" --output \"" + outputParam + L"\"";
-        if (noiseEnabled)
-            cmdLine += L" --noise";
+
+        // Add noise reduction settings
+        if (noiseType == NoiseReductionType::RNNoise)
+        {
+            cmdLine += L" --rnnoise";
+        }
+        else if (noiseType == NoiseReductionType::Speex)
+        {
+            cmdLine += L" --speex";
+
+            // Get Speex settings
+            int level = -(int)SendMessage(g_hSpeexLevelSlider, TBM_GETPOS, 0, 0);
+            cmdLine += L" --speex-level " + std::to_wstring(level);
+
+            if (SendMessage(g_hSpeexVadCheck, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                cmdLine += L" --speex-vad";
+            if (SendMessage(g_hSpeexAgcCheck, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                cmdLine += L" --speex-agc";
+            if (SendMessage(g_hSpeexDereverbCheck, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                cmdLine += L" --speex-dereverb";
+        }
+
         cmdLine += L" --autostart";
         cmdLine += L" --autohide";  // Launch to system tray
         cmdLine += L"\r\n";
@@ -702,6 +872,45 @@ void ShowTrayContextMenu()
     DestroyMenu(hMenu);
 }
 
+void UpdateSpeexControlsVisibility()
+{
+    int noiseIndex = SendMessage(g_hNoiseCombo, CB_GETCURSEL, 0, 0);
+    bool showSpeex = (noiseIndex == static_cast<int>(NoiseReductionType::Speex));
+    int showCmd = showSpeex ? SW_SHOW : SW_HIDE;
+
+    ShowWindow(g_hSpeexLevelLabel, showCmd);
+    ShowWindow(g_hSpeexLevelSlider, showCmd);
+    ShowWindow(g_hSpeexLevelValue, showCmd);
+    ShowWindow(g_hSpeexVadCheck, showCmd);
+    ShowWindow(g_hSpeexAgcCheck, showCmd);
+    ShowWindow(g_hSpeexDereverbCheck, showCmd);
+}
+
+void UpdateSpeexLevelDisplay()
+{
+    int pos = SendMessage(g_hSpeexLevelSlider, TBM_GETPOS, 0, 0);
+    wchar_t text[32];
+    swprintf_s(text, L"-%d dB", pos);
+    SetWindowText(g_hSpeexLevelValue, text);
+}
+
+NoiseReductionConfig GetNoiseConfigFromUI()
+{
+    NoiseReductionConfig config;
+
+    int noiseIndex = SendMessage(g_hNoiseCombo, CB_GETCURSEL, 0, 0);
+    config.type = static_cast<NoiseReductionType>(noiseIndex);
+
+    // Get Speex settings (always populate, even if not using Speex)
+    int sliderPos = SendMessage(g_hSpeexLevelSlider, TBM_GETPOS, 0, 0);
+    config.speex.noiseSuppressionLevel = -sliderPos;  // Convert to negative
+    config.speex.enableVAD = (SendMessage(g_hSpeexVadCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    config.speex.enableAGC = (SendMessage(g_hSpeexAgcCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    config.speex.enableDereverb = (SendMessage(g_hSpeexDereverbCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+
+    return config;
+}
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
@@ -714,6 +923,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         else if (LOWORD(wParam) == IDC_SAVE_BUTTON)
         {
             SaveSettingsToBatchFile();
+        }
+        else if (LOWORD(wParam) == IDC_NOISE_COMBO && HIWORD(wParam) == CBN_SELCHANGE)
+        {
+            // Noise reduction type changed - update Speex controls visibility
+            UpdateSpeexControlsVisibility();
         }
         else if (LOWORD(wParam) == ID_TRAY_RESTORE)
         {
@@ -730,6 +944,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             RemoveTrayIcon();
             // Close application
             DestroyWindow(hWnd);
+        }
+        break;
+
+    case WM_HSCROLL:
+        // Handle trackbar/slider changes
+        if ((HWND)lParam == g_hSpeexLevelSlider)
+        {
+            UpdateSpeexLevelDisplay();
         }
         break;
 

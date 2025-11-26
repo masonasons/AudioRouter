@@ -16,6 +16,8 @@ set(SOURCES
     src/AudioDeviceManager.cpp
     src/AudioEngine.cpp
     src/NoiseSuppress.cpp
+    src/RNNoiseProcessor.cpp
+    src/SpeexProcessor.cpp
 )
 
 # Create executable
@@ -43,6 +45,7 @@ if(EXISTS "${RNNOISE_DIR}")
 
         # Add include directory
         target_include_directories(AudioRouter PRIVATE "${RNNOISE_DIR}/include")
+        target_compile_definitions(AudioRouter PRIVATE HAVE_RNNOISE=1)
 
         # Link the library
         if(EXISTS "${RNNOISE_DIR}/lib/rnnoise.lib")
@@ -106,6 +109,7 @@ if(EXISTS "${RNNOISE_DIR}")
             # Link RNNoise to main executable
             target_include_directories(AudioRouter PRIVATE "${RNNOISE_DIR}/include")
             target_link_libraries(AudioRouter rnnoise)
+            target_compile_definitions(AudioRouter PRIVATE HAVE_RNNOISE=1)
 
             list(LENGTH RNNOISE_SOURCES RNNOISE_SOURCES_COUNT)
             message(STATUS "RNNoise library created with ${RNNOISE_SOURCES_COUNT} source files")
@@ -123,6 +127,102 @@ if(EXISTS "${RNNOISE_DIR}")
     endif()
 else()
     message(STATUS "RNNoise not found at ${RNNOISE_DIR} - building without noise suppression")
+endif()
+
+#
+# Speex Integration
+#
+set(SPEEX_DIR "${CMAKE_SOURCE_DIR}/external/speex")
+set(SPEEXDSP_DIR "${CMAKE_SOURCE_DIR}/external/speexdsp")
+set(SPEEXDSP_CONFIG_DIR "${CMAKE_SOURCE_DIR}/external/speexdsp_config")
+
+# Check if SpeexDSP is available (speexdsp contains the preprocessor we need)
+if(EXISTS "${SPEEXDSP_DIR}")
+    message(STATUS "SpeexDSP directory found: ${SPEEXDSP_DIR}")
+
+    # Method 1: Pre-built library
+    if(EXISTS "${SPEEXDSP_DIR}/lib/speexdsp.lib" OR EXISTS "${SPEEXDSP_DIR}/lib/libspeexdsp.a")
+        message(STATUS "Using pre-built SpeexDSP library")
+
+        target_include_directories(AudioRouter PRIVATE
+            "${SPEEXDSP_DIR}/include"
+            "${SPEEXDSP_CONFIG_DIR}"
+        )
+        target_compile_definitions(AudioRouter PRIVATE HAVE_SPEEX=1)
+
+        if(EXISTS "${SPEEXDSP_DIR}/lib/speexdsp.lib")
+            target_link_libraries(AudioRouter "${SPEEXDSP_DIR}/lib/speexdsp.lib")
+        else()
+            target_link_libraries(AudioRouter "${SPEEXDSP_DIR}/lib/libspeexdsp.a")
+        endif()
+
+    # Method 2: Build from source files
+    elseif(EXISTS "${SPEEXDSP_DIR}/libspeexdsp")
+        message(STATUS "Building SpeexDSP from source")
+
+        # Collect SpeexDSP source files
+        file(GLOB SPEEXDSP_SOURCES
+            "${SPEEXDSP_DIR}/libspeexdsp/*.c"
+        )
+
+        # Exclude test files
+        list(FILTER SPEEXDSP_SOURCES EXCLUDE REGEX "testdenoise\\.c$")
+        list(FILTER SPEEXDSP_SOURCES EXCLUDE REGEX "testecho\\.c$")
+        list(FILTER SPEEXDSP_SOURCES EXCLUDE REGEX "testjitter\\.c$")
+        list(FILTER SPEEXDSP_SOURCES EXCLUDE REGEX "testresample\\.c$")
+        list(FILTER SPEEXDSP_SOURCES EXCLUDE REGEX "testresample2\\.c$")
+
+        if(SPEEXDSP_SOURCES)
+            add_library(speexdsp STATIC ${SPEEXDSP_SOURCES})
+
+            target_include_directories(speexdsp PUBLIC
+                "${SPEEXDSP_DIR}/include"
+                "${SPEEXDSP_DIR}/include/speex"
+                "${SPEEXDSP_DIR}/libspeexdsp"
+                "${SPEEXDSP_CONFIG_DIR}"
+            )
+
+            # Speex needs these defines
+            target_compile_definitions(speexdsp PRIVATE
+                HAVE_CONFIG_H=1
+            )
+
+            if(MSVC)
+                target_compile_options(speexdsp PRIVATE
+                    /W3
+                    /wd4244
+                    /wd4267
+                    /wd4305
+                )
+                target_compile_definitions(speexdsp PRIVATE _CRT_SECURE_NO_WARNINGS)
+            else()
+                target_compile_options(speexdsp PRIVATE
+                    -Wno-sign-compare
+                    -Wno-unused-parameter
+                )
+            endif()
+
+            target_include_directories(AudioRouter PRIVATE
+                "${SPEEXDSP_DIR}/include"
+                "${SPEEXDSP_CONFIG_DIR}"
+            )
+            target_link_libraries(AudioRouter speexdsp)
+            target_compile_definitions(AudioRouter PRIVATE HAVE_SPEEX=1)
+
+            list(LENGTH SPEEXDSP_SOURCES SPEEXDSP_SOURCES_COUNT)
+            message(STATUS "SpeexDSP library created with ${SPEEXDSP_SOURCES_COUNT} source files")
+        endif()
+
+    # Method 3: Include-only header files
+    elseif(EXISTS "${SPEEXDSP_DIR}/include")
+        message(STATUS "Using SpeexDSP as header-only (linking will fail)")
+        target_include_directories(AudioRouter PRIVATE
+            "${SPEEXDSP_DIR}/include"
+            "${SPEEXDSP_CONFIG_DIR}"
+        )
+    endif()
+else()
+    message(STATUS "SpeexDSP not found at ${SPEEXDSP_DIR} - Speex noise suppression will not be available")
 endif()
 
 # Set output directory
