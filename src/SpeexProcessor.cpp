@@ -64,14 +64,14 @@ bool SpeexProcessor::Initialize(unsigned int sampleRate, unsigned int channels)
     m_channels = channels;
 
     // Calculate frame size based on sample rate
-    // Speex preprocess works best with 10-30ms frames
-    // Using 20ms as a good balance
-    m_frameSize = (sampleRate * 20) / 1000;  // 20ms worth of samples
+    // Use 10ms to match typical WASAPI callback size and minimize latency
+    // Speex preprocess supports 10ms frames
+    m_frameSize = (sampleRate * 10) / 1000;  // 10ms worth of samples
 
     if (m_diagnosticCallback)
     {
         std::wostringstream msg;
-        msg << L"Speex frame size: " << m_frameSize << L" samples (20ms at " << sampleRate << L" Hz)";
+        msg << L"Speex frame size: " << m_frameSize << L" samples (10ms at " << sampleRate << L" Hz)";
         m_diagnosticCallback(msg.str());
     }
 
@@ -92,14 +92,19 @@ bool SpeexProcessor::Initialize(unsigned int sampleRate, unsigned int channels)
 
     // Pre-allocate buffers
     m_frameBuffer.resize(m_frameSize);
-    m_monoBuffer.resize(m_frameSize * 2);  // Extra space
-    m_outputBuffer.resize(m_frameSize * 2);
+    m_monoBuffer.resize(m_frameSize * 4);  // Extra space for larger callbacks
+    m_outputBuffer.resize(m_frameSize * 4);
 
     // Reset accumulation state
     m_accumulatedSamples = 0;
     m_outputBufferReadPos = 0;
     m_outputBufferAvailable = 0;
     m_totalFramesProcessed = 0;
+
+    // Pre-fill output buffer with silence to handle initial latency
+    // This adds one frame of latency but prevents choppy audio at startup
+    std::fill(m_outputBuffer.begin(), m_outputBuffer.begin() + m_frameSize, 0.0f);
+    m_outputBufferAvailable = m_frameSize;
 
     m_isInitialized = true;
 
@@ -242,13 +247,9 @@ void SpeexProcessor::Process(float* audioData, unsigned int frameCount, unsigned
                 m_outputBufferReadPos = 0;
             }
         }
-        else
+        else if (inputPos < frameCount)
         {
-            // No processed samples available, need to process more input
-            if (inputPos >= frameCount)
-            {
-                break;
-            }
+            // No processed samples available, need to accumulate and process more input
 
             // Accumulate samples into frame buffer until we have enough
             unsigned int samplesToAccumulate = std::min(
@@ -326,6 +327,28 @@ void SpeexProcessor::Process(float* audioData, unsigned int frameCount, unsigned
                 // Reset accumulation
                 m_accumulatedSamples = 0;
             }
+        }
+        else
+        {
+            // No more input and no processed output available
+            // Output silence to maintain timing (this should rarely happen with pre-filled buffer)
+            if (channels == 1)
+            {
+                audioData[outputPos] = 0.0f;
+            }
+            else if (channels == 2)
+            {
+                audioData[outputPos * 2] = 0.0f;
+                audioData[outputPos * 2 + 1] = 0.0f;
+            }
+            else
+            {
+                for (unsigned int ch = 0; ch < channels; ch++)
+                {
+                    audioData[outputPos * channels + ch] = 0.0f;
+                }
+            }
+            outputPos++;
         }
     }
 }
