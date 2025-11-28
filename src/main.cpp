@@ -27,7 +27,8 @@
 #define IDC_SPEEX_AGC_CHECK      1012
 #define IDC_SPEEX_DEREVERB_CHECK 1013
 
-// System tray
+// System tray and custom messages
+#define WM_APPENDDIAG        (WM_USER + 2)
 #define WM_TRAYICON          (WM_USER + 1)
 #define ID_TRAY_RESTORE      2001
 #define ID_TRAY_EXIT         2002
@@ -57,7 +58,6 @@ bool g_isRunning = false;
 // Current noise reduction config (for Speex settings persistence)
 NoiseReductionConfig g_noiseConfig;
 
-// System tray
 NOTIFYICONDATA g_nid = {};
 bool g_isInTray = false;
 
@@ -83,6 +83,7 @@ void OnStartStop();
 void UpdateStatus(const wchar_t* status);
 void UpdateDiagnostics(const std::wstring& text);
 void AppendDiagnostics(const std::wstring& text);
+void AppendDiagnosticsImpl(const std::wstring& text);
 void ParseCommandLine(CommandLineParams& params);
 void ApplyCommandLineParams(const CommandLineParams& params);
 void SaveSettingsToBatchFile();
@@ -436,7 +437,7 @@ void UpdateDiagnostics(const std::wstring& text)
     SetWindowText(g_hDiagText, text.c_str());
 }
 
-void AppendDiagnostics(const std::wstring& text)
+void AppendDiagnosticsImpl(const std::wstring& text)
 {
     // Get current text
     int len = GetWindowTextLength(g_hDiagText);
@@ -453,6 +454,17 @@ void AppendDiagnostics(const std::wstring& text)
     // Scroll to bottom
     SendMessage(g_hDiagText, EM_SETSEL, current.length(), current.length());
     SendMessage(g_hDiagText, EM_SCROLLCARET, 0, 0);
+}
+
+void AppendDiagnostics(const std::wstring& text)
+{
+    // Thread-safe: post message to UI thread instead of directly manipulating controls
+    // The text is allocated on the heap and will be freed by the message handler
+    std::wstring* pText = new std::wstring(text);
+    if (!PostMessage(g_hWnd, WM_APPENDDIAG, 0, (LPARAM)pText))
+    {
+        delete pText;
+    }
 }
 
 void ParseCommandLine(CommandLineParams& params)
@@ -798,18 +810,21 @@ void UpdateTrayTooltip()
 
         if (inputIndex != CB_ERR && outputIndex != CB_ERR)
         {
-            wchar_t inputName[256] = {0};
-            wchar_t outputName[256] = {0};
+            wchar_t inputName[64] = {0};
+            wchar_t outputName[64] = {0};
             SendMessage(g_hInputCombo, CB_GETLBTEXT, inputIndex, (LPARAM)inputName);
             SendMessage(g_hOutputCombo, CB_GETLBTEXT, outputIndex, (LPARAM)outputName);
 
-            // Build tooltip: "Audio Router\nInput → Output"
-            std::wstring tooltip = L"Audio Router\n";
-            tooltip += inputName;
-            tooltip += L" \u2192 ";  // Unicode arrow →
-            tooltip += outputName;
+            // Truncate device names if too long (szTip is max 128 chars)
+            inputName[40] = L'\0';
+            outputName[40] = L'\0';
 
-            wcscpy_s(g_nid.szTip, tooltip.c_str());
+            // Build tooltip: "Audio Router\nInput → Output"
+            wchar_t tooltip[128] = {0};
+            _snwprintf_s(tooltip, _countof(tooltip), _TRUNCATE,
+                L"Audio Router\n%s \u2192 %s", inputName, outputName);
+
+            wcscpy_s(g_nid.szTip, tooltip);
         }
         else
         {
@@ -975,6 +990,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             // Right click: show context menu
             ShowTrayContextMenu();
+        }
+        break;
+
+    case WM_APPENDDIAG:
+        // Thread-safe diagnostic text update from audio thread
+        {
+            std::wstring* pText = (std::wstring*)lParam;
+            AppendDiagnosticsImpl(*pText);
+            delete pText;
         }
         break;
 
