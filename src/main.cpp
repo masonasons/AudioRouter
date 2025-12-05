@@ -31,6 +31,9 @@
 #define IDC_RNNOISE_VAD_LABEL     1014
 #define IDC_RNNOISE_VAD_SLIDER    1015
 #define IDC_RNNOISE_VAD_VALUE     1016
+#define IDC_RNNOISE_GRACE_LABEL   1017
+#define IDC_RNNOISE_GRACE_SLIDER  1018
+#define IDC_RNNOISE_GRACE_VALUE   1019
 
 // System tray and custom messages
 #define WM_APPENDDIAG        (WM_USER + 2)
@@ -60,6 +63,9 @@ HWND g_hSpeexDereverbCheck = NULL;
 HWND g_hRnnoiseVadLabel = NULL;
 HWND g_hRnnoiseVadSlider = NULL;
 HWND g_hRnnoiseVadValue = NULL;
+HWND g_hRnnoiseGraceLabel = NULL;
+HWND g_hRnnoiseGraceSlider = NULL;
+HWND g_hRnnoiseGraceValue = NULL;
 
 AudioDeviceManager* g_deviceManager = nullptr;
 AudioEngine* g_audioEngine = nullptr;
@@ -82,6 +88,7 @@ struct CommandLineParams
     bool speexAgc = false;
     bool speexDereverb = false;
     int rnnoiseVadThreshold = 0;  // 0-100 (0 = disabled)
+    int rnnoiseGracePeriod = 200; // ms (0-1000)
     bool autoStart = false;
     bool autoHide = false;
 };
@@ -107,6 +114,7 @@ void ShowTrayContextMenu();
 void UpdateSpeexControlsVisibility();
 void UpdateRnnoiseControlsVisibility();
 void UpdateRnnoiseVadDisplay();
+void UpdateRnnoiseGraceDisplay();
 void UpdateSpeexLevelDisplay();
 NoiseReductionConfig GetNoiseConfigFromUI();
 
@@ -323,6 +331,28 @@ void InitializeControls(HWND hWnd)
         WS_CHILD,  // Not visible initially
         315, yPos, 60, 20, hWnd, (HMENU)IDC_RNNOISE_VAD_VALUE, NULL, NULL);
     SendMessage(g_hRnnoiseVadValue, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 25;
+
+    // Grace period label
+    g_hRnnoiseGraceLabel = CreateWindow(L"STATIC", L"  Grace Period:",
+        WS_CHILD,  // Not visible initially
+        10, yPos, 120, 20, hWnd, (HMENU)IDC_RNNOISE_GRACE_LABEL, NULL, NULL);
+    SendMessage(g_hRnnoiseGraceLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+    // Grace period slider (trackbar) - 0-1000 ms
+    g_hRnnoiseGraceSlider = CreateWindowEx(
+        0, TRACKBAR_CLASS, NULL,
+        WS_CHILD | WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+        130, yPos - 3, 180, 25, hWnd, (HMENU)IDC_RNNOISE_GRACE_SLIDER, NULL, NULL);
+    SendMessage(g_hRnnoiseGraceSlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 1000));
+    SendMessage(g_hRnnoiseGraceSlider, TBM_SETPOS, TRUE, 200);  // Default: 200ms
+    SendMessage(g_hRnnoiseGraceSlider, TBM_SETTICFREQ, 100, 0);
+
+    // Grace period value display
+    g_hRnnoiseGraceValue = CreateWindow(L"STATIC", L"200 ms",
+        WS_CHILD,  // Not visible initially
+        315, yPos, 60, 20, hWnd, (HMENU)IDC_RNNOISE_GRACE_VALUE, NULL, NULL);
+    SendMessage(g_hRnnoiseGraceValue, WM_SETFONT, (WPARAM)hFont, TRUE);
     yPos += 30;
 
     // Start/Stop button
@@ -569,6 +599,13 @@ void ParseCommandLine(CommandLineParams& params)
             if (params.rnnoiseVadThreshold < 0) params.rnnoiseVadThreshold = 0;
             if (params.rnnoiseVadThreshold > 100) params.rnnoiseVadThreshold = 100;
         }
+        else if ((arg == L"--rnnoise-grace") && i + 1 < argc)
+        {
+            params.rnnoiseGracePeriod = _wtoi(argv[++i]);
+            // Clamp to valid range
+            if (params.rnnoiseGracePeriod < 0) params.rnnoiseGracePeriod = 0;
+            if (params.rnnoiseGracePeriod > 1000) params.rnnoiseGracePeriod = 1000;
+        }
         else if (arg == L"--autostart" || arg == L"-a")
         {
             params.autoStart = true;
@@ -690,12 +727,14 @@ void ApplyCommandLineParams(const CommandLineParams& params)
 
     // Apply RNNoise settings
     SendMessage(g_hRnnoiseVadSlider, TBM_SETPOS, TRUE, params.rnnoiseVadThreshold);
+    SendMessage(g_hRnnoiseGraceSlider, TBM_SETPOS, TRUE, params.rnnoiseGracePeriod);
 
     // Update controls visibility and displays
     UpdateSpeexControlsVisibility();
     UpdateSpeexLevelDisplay();
     UpdateRnnoiseControlsVisibility();
     UpdateRnnoiseVadDisplay();
+    UpdateRnnoiseGraceDisplay();
 }
 
 void SaveSettingsToBatchFile()
@@ -780,7 +819,11 @@ void SaveSettingsToBatchFile()
             // Get RNNoise settings
             int vadThreshold = (int)SendMessage(g_hRnnoiseVadSlider, TBM_GETPOS, 0, 0);
             if (vadThreshold > 0)
+            {
                 cmdLine += L" --rnnoise-vad " + std::to_wstring(vadThreshold);
+                int gracePeriod = (int)SendMessage(g_hRnnoiseGraceSlider, TBM_GETPOS, 0, 0);
+                cmdLine += L" --rnnoise-grace " + std::to_wstring(gracePeriod);
+            }
         }
         else if (noiseType == NoiseReductionType::Speex)
         {
@@ -971,6 +1014,9 @@ void UpdateRnnoiseControlsVisibility()
     ShowWindow(g_hRnnoiseVadLabel, showCmd);
     ShowWindow(g_hRnnoiseVadSlider, showCmd);
     ShowWindow(g_hRnnoiseVadValue, showCmd);
+    ShowWindow(g_hRnnoiseGraceLabel, showCmd);
+    ShowWindow(g_hRnnoiseGraceSlider, showCmd);
+    ShowWindow(g_hRnnoiseGraceValue, showCmd);
 }
 
 void UpdateRnnoiseVadDisplay()
@@ -986,6 +1032,14 @@ void UpdateRnnoiseVadDisplay()
         swprintf_s(text, L"%d%%", pos);
     }
     SetWindowText(g_hRnnoiseVadValue, text);
+}
+
+void UpdateRnnoiseGraceDisplay()
+{
+    int pos = SendMessage(g_hRnnoiseGraceSlider, TBM_GETPOS, 0, 0);
+    wchar_t text[32];
+    swprintf_s(text, L"%d ms", pos);
+    SetWindowText(g_hRnnoiseGraceValue, text);
 }
 
 NoiseReductionConfig GetNoiseConfigFromUI()
@@ -1004,8 +1058,9 @@ NoiseReductionConfig GetNoiseConfigFromUI()
 
     // Get RNNoise settings
     int vadPos = SendMessage(g_hRnnoiseVadSlider, TBM_GETPOS, 0, 0);
+    int gracePos = SendMessage(g_hRnnoiseGraceSlider, TBM_GETPOS, 0, 0);
     config.rnnoise.vadThreshold = vadPos / 100.0f;  // Convert 0-100 to 0.0-1.0
-    config.rnnoise.vadGracePeriodMs = 200.0f;       // Fixed grace period
+    config.rnnoise.vadGracePeriodMs = static_cast<float>(gracePos);
     config.rnnoise.attenuationFactor = 0.0f;        // Mute when below threshold
 
     return config;
@@ -1057,6 +1112,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         else if ((HWND)lParam == g_hRnnoiseVadSlider)
         {
             UpdateRnnoiseVadDisplay();
+        }
+        else if ((HWND)lParam == g_hRnnoiseGraceSlider)
+        {
+            UpdateRnnoiseGraceDisplay();
         }
         break;
 
