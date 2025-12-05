@@ -38,7 +38,7 @@ bool NoiseSuppress::Initialize(const NoiseReductionConfig& config, unsigned int 
             {
                 m_diagnosticCallback(L"Initializing RNNoise processor...");
             }
-            m_processor = std::make_unique<RNNoiseProcessor>();
+            m_processor = std::make_unique<RNNoiseProcessor>(config.rnnoise);
             break;
         }
 

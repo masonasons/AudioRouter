@@ -13,8 +13,11 @@ typedef void DenoiseState;
 class RNNoiseProcessor : public INoiseProcessor
 {
 public:
-    RNNoiseProcessor();
+    RNNoiseProcessor(const RNNoiseConfig& config = RNNoiseConfig());
     ~RNNoiseProcessor() override;
+
+    // Update configuration
+    void UpdateConfig(const RNNoiseConfig& config);
 
     // INoiseProcessor interface
     bool Initialize(unsigned int sampleRate, unsigned int channels) override;
@@ -42,6 +45,7 @@ public:
 private:
     DenoiseState* m_state;
     bool m_isInitialized;
+    RNNoiseConfig m_config;
 
 #ifdef HAVE_RNNOISE
     // Audio format tracking
@@ -58,6 +62,10 @@ private:
     unsigned int m_accumulatedSamples;        // How many samples currently in frame buffer
     unsigned int m_outputBufferReadPos;       // Read position in output buffer
     unsigned int m_outputBufferAvailable;     // Available samples in output buffer
+
+    // VAD state for grace period
+    float m_lastVadProbability;               // Last VAD probability from RNNoise
+    float m_vadGraceSamplesRemaining;         // Samples remaining in grace period
 #endif
 
     // Diagnostic counters

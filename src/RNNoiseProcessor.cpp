@@ -11,25 +11,35 @@
 
 #ifndef HAVE_RNNOISE
 // Stub implementation when RNNoise is not available
-RNNoiseProcessor::RNNoiseProcessor() : m_state(nullptr), m_isInitialized(false), m_totalFramesProcessed(0) {}
+RNNoiseProcessor::RNNoiseProcessor(const RNNoiseConfig& config)
+    : m_state(nullptr), m_isInitialized(false), m_config(config), m_totalFramesProcessed(0) {}
 RNNoiseProcessor::~RNNoiseProcessor() {}
 bool RNNoiseProcessor::Initialize(unsigned int, unsigned int) {
     if (m_diagnosticCallback) m_diagnosticCallback(L"RNNoise not available (not compiled in)");
     return false;
 }
 void RNNoiseProcessor::Process(float*, unsigned int, unsigned int) {}
+void RNNoiseProcessor::UpdateConfig(const RNNoiseConfig& config) { m_config = config; }
 #else
 
-RNNoiseProcessor::RNNoiseProcessor()
+RNNoiseProcessor::RNNoiseProcessor(const RNNoiseConfig& config)
     : m_state(nullptr)
     , m_isInitialized(false)
+    , m_config(config)
     , m_inputSampleRate(0)
     , m_inputChannels(0)
     , m_accumulatedSamples(0)
     , m_outputBufferReadPos(0)
     , m_outputBufferAvailable(0)
+    , m_lastVadProbability(0.0f)
+    , m_vadGraceSamplesRemaining(0.0f)
     , m_totalFramesProcessed(0)
 {
+}
+
+void RNNoiseProcessor::UpdateConfig(const RNNoiseConfig& config)
+{
+    m_config = config;
 }
 
 RNNoiseProcessor::~RNNoiseProcessor()
@@ -242,6 +252,35 @@ void RNNoiseProcessor::Process(float* audioData, unsigned int frameCount, unsign
                 for (unsigned int i = 0; i < RNNOISE_FRAME_SIZE; i++)
                 {
                     m_processedBuffer[i] /= 32768.0f;
+                }
+
+                m_lastVadProbability = vad_prob;
+
+                // Apply VAD gating if enabled (vadThreshold > 0)
+                if (m_config.vadThreshold > 0.0f)
+                {
+                    bool isSpeech = (vad_prob >= m_config.vadThreshold);
+
+                    if (isSpeech)
+                    {
+                        // Reset grace period when speech detected
+                        m_vadGraceSamplesRemaining = (m_config.vadGracePeriodMs / 1000.0f) * m_inputSampleRate;
+                    }
+                    else if (m_vadGraceSamplesRemaining > 0)
+                    {
+                        // In grace period after speech
+                        m_vadGraceSamplesRemaining -= RNNOISE_FRAME_SIZE;
+                        isSpeech = true;  // Treat as speech during grace period
+                    }
+
+                    if (!isSpeech)
+                    {
+                        // Apply attenuation when not speech
+                        for (unsigned int i = 0; i < RNNOISE_FRAME_SIZE; i++)
+                        {
+                            m_processedBuffer[i] *= m_config.attenuationFactor;
+                        }
+                    }
                 }
 
                 // DIAGNOSTIC: Check output and voice activity

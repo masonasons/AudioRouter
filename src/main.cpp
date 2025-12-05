@@ -27,6 +27,11 @@
 #define IDC_SPEEX_AGC_CHECK      1012
 #define IDC_SPEEX_DEREVERB_CHECK 1013
 
+// RNNoise config controls
+#define IDC_RNNOISE_VAD_LABEL     1014
+#define IDC_RNNOISE_VAD_SLIDER    1015
+#define IDC_RNNOISE_VAD_VALUE     1016
+
 // System tray and custom messages
 #define WM_APPENDDIAG        (WM_USER + 2)
 #define WM_TRAYICON          (WM_USER + 1)
@@ -51,6 +56,11 @@ HWND g_hSpeexVadCheck = NULL;
 HWND g_hSpeexAgcCheck = NULL;
 HWND g_hSpeexDereverbCheck = NULL;
 
+// RNNoise configuration controls
+HWND g_hRnnoiseVadLabel = NULL;
+HWND g_hRnnoiseVadSlider = NULL;
+HWND g_hRnnoiseVadValue = NULL;
+
 AudioDeviceManager* g_deviceManager = nullptr;
 AudioEngine* g_audioEngine = nullptr;
 bool g_isRunning = false;
@@ -71,6 +81,7 @@ struct CommandLineParams
     bool speexVad = false;
     bool speexAgc = false;
     bool speexDereverb = false;
+    int rnnoiseVadThreshold = 0;  // 0-100 (0 = disabled)
     bool autoStart = false;
     bool autoHide = false;
 };
@@ -94,6 +105,8 @@ void RestoreFromTray();
 void MinimizeToTray();
 void ShowTrayContextMenu();
 void UpdateSpeexControlsVisibility();
+void UpdateRnnoiseControlsVisibility();
+void UpdateRnnoiseVadDisplay();
 void UpdateSpeexLevelDisplay();
 NoiseReductionConfig GetNoiseConfigFromUI();
 
@@ -287,6 +300,29 @@ void InitializeControls(HWND hWnd)
         WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX,
         295, yPos, 80, 20, hWnd, (HMENU)IDC_SPEEX_DEREVERB_CHECK, NULL, NULL);
     SendMessage(g_hSpeexDereverbCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+    yPos += 30;
+
+    // RNNoise configuration controls (initially hidden)
+    // VAD threshold label
+    g_hRnnoiseVadLabel = CreateWindow(L"STATIC", L"  VAD Threshold:",
+        WS_CHILD,  // Not visible initially
+        10, yPos, 120, 20, hWnd, (HMENU)IDC_RNNOISE_VAD_LABEL, NULL, NULL);
+    SendMessage(g_hRnnoiseVadLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+    // VAD threshold slider (trackbar) - 0-100 represents 0.0-1.0
+    g_hRnnoiseVadSlider = CreateWindowEx(
+        0, TRACKBAR_CLASS, NULL,
+        WS_CHILD | WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+        130, yPos - 3, 180, 25, hWnd, (HMENU)IDC_RNNOISE_VAD_SLIDER, NULL, NULL);
+    SendMessage(g_hRnnoiseVadSlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+    SendMessage(g_hRnnoiseVadSlider, TBM_SETPOS, TRUE, 0);  // Default: 0 (disabled)
+    SendMessage(g_hRnnoiseVadSlider, TBM_SETTICFREQ, 10, 0);
+
+    // VAD value display
+    g_hRnnoiseVadValue = CreateWindow(L"STATIC", L"Off",
+        WS_CHILD,  // Not visible initially
+        315, yPos, 60, 20, hWnd, (HMENU)IDC_RNNOISE_VAD_VALUE, NULL, NULL);
+    SendMessage(g_hRnnoiseVadValue, WM_SETFONT, (WPARAM)hFont, TRUE);
     yPos += 30;
 
     // Start/Stop button
@@ -526,6 +562,13 @@ void ParseCommandLine(CommandLineParams& params)
         {
             params.speexDereverb = true;
         }
+        else if ((arg == L"--rnnoise-vad") && i + 1 < argc)
+        {
+            params.rnnoiseVadThreshold = _wtoi(argv[++i]);
+            // Clamp to valid range
+            if (params.rnnoiseVadThreshold < 0) params.rnnoiseVadThreshold = 0;
+            if (params.rnnoiseVadThreshold > 100) params.rnnoiseVadThreshold = 100;
+        }
         else if (arg == L"--autostart" || arg == L"-a")
         {
             params.autoStart = true;
@@ -645,9 +688,14 @@ void ApplyCommandLineParams(const CommandLineParams& params)
     if (params.speexDereverb)
         SendMessage(g_hSpeexDereverbCheck, BM_SETCHECK, BST_CHECKED, 0);
 
-    // Update Speex controls visibility and level display
+    // Apply RNNoise settings
+    SendMessage(g_hRnnoiseVadSlider, TBM_SETPOS, TRUE, params.rnnoiseVadThreshold);
+
+    // Update controls visibility and displays
     UpdateSpeexControlsVisibility();
     UpdateSpeexLevelDisplay();
+    UpdateRnnoiseControlsVisibility();
+    UpdateRnnoiseVadDisplay();
 }
 
 void SaveSettingsToBatchFile()
@@ -728,6 +776,11 @@ void SaveSettingsToBatchFile()
         if (noiseType == NoiseReductionType::RNNoise)
         {
             cmdLine += L" --rnnoise";
+
+            // Get RNNoise settings
+            int vadThreshold = (int)SendMessage(g_hRnnoiseVadSlider, TBM_GETPOS, 0, 0);
+            if (vadThreshold > 0)
+                cmdLine += L" --rnnoise-vad " + std::to_wstring(vadThreshold);
         }
         else if (noiseType == NoiseReductionType::Speex)
         {
@@ -909,6 +962,32 @@ void UpdateSpeexLevelDisplay()
     SetWindowText(g_hSpeexLevelValue, text);
 }
 
+void UpdateRnnoiseControlsVisibility()
+{
+    int noiseIndex = SendMessage(g_hNoiseCombo, CB_GETCURSEL, 0, 0);
+    bool showRnnoise = (noiseIndex == static_cast<int>(NoiseReductionType::RNNoise));
+    int showCmd = showRnnoise ? SW_SHOW : SW_HIDE;
+
+    ShowWindow(g_hRnnoiseVadLabel, showCmd);
+    ShowWindow(g_hRnnoiseVadSlider, showCmd);
+    ShowWindow(g_hRnnoiseVadValue, showCmd);
+}
+
+void UpdateRnnoiseVadDisplay()
+{
+    int pos = SendMessage(g_hRnnoiseVadSlider, TBM_GETPOS, 0, 0);
+    wchar_t text[32];
+    if (pos == 0)
+    {
+        wcscpy_s(text, L"Off");
+    }
+    else
+    {
+        swprintf_s(text, L"%d%%", pos);
+    }
+    SetWindowText(g_hRnnoiseVadValue, text);
+}
+
 NoiseReductionConfig GetNoiseConfigFromUI()
 {
     NoiseReductionConfig config;
@@ -922,6 +1001,12 @@ NoiseReductionConfig GetNoiseConfigFromUI()
     config.speex.enableVAD = (SendMessage(g_hSpeexVadCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
     config.speex.enableAGC = (SendMessage(g_hSpeexAgcCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
     config.speex.enableDereverb = (SendMessage(g_hSpeexDereverbCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+
+    // Get RNNoise settings
+    int vadPos = SendMessage(g_hRnnoiseVadSlider, TBM_GETPOS, 0, 0);
+    config.rnnoise.vadThreshold = vadPos / 100.0f;  // Convert 0-100 to 0.0-1.0
+    config.rnnoise.vadGracePeriodMs = 200.0f;       // Fixed grace period
+    config.rnnoise.attenuationFactor = 0.0f;        // Mute when below threshold
 
     return config;
 }
@@ -941,8 +1026,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         else if (LOWORD(wParam) == IDC_NOISE_COMBO && HIWORD(wParam) == CBN_SELCHANGE)
         {
-            // Noise reduction type changed - update Speex controls visibility
+            // Noise reduction type changed - update controls visibility
             UpdateSpeexControlsVisibility();
+            UpdateRnnoiseControlsVisibility();
         }
         else if (LOWORD(wParam) == ID_TRAY_RESTORE)
         {
@@ -967,6 +1053,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if ((HWND)lParam == g_hSpeexLevelSlider)
         {
             UpdateSpeexLevelDisplay();
+        }
+        else if ((HWND)lParam == g_hRnnoiseVadSlider)
+        {
+            UpdateRnnoiseVadDisplay();
         }
         break;
 

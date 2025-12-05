@@ -24,11 +24,12 @@ struct SpeexConfig
     SpeexConfig(int suppressionLevel) : noiseSuppressionLevel(suppressionLevel) {}
 };
 
-// Configuration for RNNoise (currently no configurable parameters)
+// Configuration for RNNoise
 struct RNNoiseConfig
 {
-    // RNNoise uses a neural network model with no runtime parameters
-    // Future: could add model selection if multiple models are supported
+    float vadThreshold = 0.0f;            // VAD threshold (0.0-1.0). Below this, audio is attenuated. 0 = disabled
+    float vadGracePeriodMs = 200.0f;      // Grace period after speech ends before attenuation kicks in
+    float attenuationFactor = 0.0f;       // How much to attenuate when VAD below threshold (0.0 = mute, 1.0 = pass through)
 
     RNNoiseConfig() = default;
 };
